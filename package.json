@@ -1,0 +1,33 @@
+{
+  "name": "@devpulse/browser",
+  "version": "0.1.0",
+  "description": "DevPulse browser SDK — frontend error and performance tracking",
+  "license": "MIT",
+  "keywords": ["error-tracking", "monitoring", "browser", "sdk", "web-vitals"],
+  "main": "dist/devpulse.umd.js",
+  "module": "dist/devpulse.es.js",
+  "exports": {
+    ".": {
+      "import": "./dist/devpulse.es.js",
+      "require": "./dist/devpulse.umd.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": true,
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest",
+    "lint": "eslint src",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "eslint": "^10.0.0",
+    "jsdom": "^25.0.0",
+    "prettier": "^3.0.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  }
+}
