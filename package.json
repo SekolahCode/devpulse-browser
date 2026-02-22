@@ -1,9 +1,15 @@
 {
   "name": "@sekolahcode/devpulse-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DevPulse browser SDK — frontend error and performance tracking",
   "license": "MIT",
-  "keywords": ["error-tracking", "monitoring", "browser", "sdk", "web-vitals"],
+  "keywords": [
+    "error-tracking",
+    "monitoring",
+    "browser",
+    "sdk",
+    "web-vitals"
+  ],
   "main": "dist/devpulse.umd.js",
   "module": "dist/devpulse.es.js",
   "exports": {
