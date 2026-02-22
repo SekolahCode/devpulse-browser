@@ -1,5 +1,5 @@
 {
-  "name": "@devpulse/browser",
+  "name": "@sekolahcode/devpulse-browser",
   "version": "0.1.0",
   "description": "DevPulse browser SDK — frontend error and performance tracking",
   "license": "MIT",

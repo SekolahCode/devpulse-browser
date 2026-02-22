@@ -1,4 +1,4 @@
-# @devpulse/browser
+# @sekolahcode/devpulse-browser
 
 Zero-dependency browser SDK for DevPulse — frontend error tracking and Core Web Vitals monitoring.
 
@@ -25,11 +25,11 @@ Zero-dependency browser SDK for DevPulse — frontend error tracking and Core We
 ### Via npm
 
 ```bash
-npm install @devpulse/browser
+npm install @sekolahcode/devpulse-browser
 ```
 
 ```js
-import { DevPulse } from '@devpulse/browser';
+import { DevPulse } from '@sekolahcode/devpulse-browser';
 
 DevPulse.init({
   dsn: 'http://localhost:8000/api/ingest/YOUR_API_KEY',
