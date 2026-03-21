@@ -5,8 +5,11 @@ export class Transport {
   }
 
   send(payload) {
-    const body = JSON.stringify(payload);
+    this._attempt(JSON.stringify(payload), 0);
+    return true;
+  }
 
+  _attempt(body, attempt) {
     // Use fetch with keepalive (survives page navigation) and credentials omitted
     // — the ingest endpoint authenticates via the API key in the URL, not cookies.
     // sendBeacon is avoided because it always sends credentials, which breaks
@@ -22,9 +25,16 @@ export class Transport {
       credentials: "omit",
       signal: controller.signal,
     })
-      .catch(() => {})
+      .then((res) => {
+        if (!res.ok && attempt === 0) {
+          setTimeout(() => this._attempt(body, 1), 1000);
+        }
+      })
+      .catch(() => {
+        if (attempt === 0) {
+          setTimeout(() => this._attempt(body, 1), 1000);
+        }
+      })
       .finally(() => clearTimeout(timer));
-
-    return true;
   }
 }
