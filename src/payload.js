@@ -81,6 +81,7 @@ function parseStack(stack) {
 }
 
 function buildContext() {
+  if (typeof window === "undefined") return {};
   return {
     url: window.location.href,
     userAgent: navigator.userAgent,
@@ -97,6 +98,7 @@ function buildContext() {
 }
 
 function buildRequest() {
+  if (typeof window === "undefined") return null;
   return {
     url: window.location.href,
   };
