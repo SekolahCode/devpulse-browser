@@ -45,39 +45,59 @@ export function buildFromPerformance(name, value, options = {}) {
   };
 }
 
+const CHROME_FULL = /at\s+(.*?)\s+\((.*?):(\d+):(\d+)\)/;
+const CHROME_ANON = /^at\s+(.*?):(\d+):(\d+)$/;
+const SAFARI = /^(.*?)@(.*?):(\d+):(\d+)$/;
+
+function parseStackLine(trimmed) {
+  // Chrome/Edge/Node: "at functionName (file.js:10:5)"
+  let m = trimmed.match(CHROME_FULL);
+  if (m) {
+    return {
+      function: m[1] ?? null,
+      file: m[2] ?? null,
+      line: parseInt(m[3]) || null,
+      column: parseInt(m[4]) || null,
+    };
+  }
+
+  // Chrome anonymous/arrow: "at file.js:10:5"
+  m = trimmed.match(CHROME_ANON);
+  if (m) {
+    return {
+      function: null,
+      file: m[1] ?? null,
+      line: parseInt(m[2]) || null,
+      column: parseInt(m[3]) || null,
+    };
+  }
+
+  // Safari/Firefox: "functionName@file.js:10:5" or "@file.js:10:5"
+  m = trimmed.match(SAFARI);
+  if (m) {
+    return {
+      function: m[1] || null,
+      file: m[2] ?? null,
+      line: parseInt(m[3]) || null,
+      column: parseInt(m[4]) || null,
+    };
+  }
+
+  return { raw: trimmed };
+}
+
+function isDevPulseFrame(file) {
+  // Strip frames from the SDK bundle itself so they don't pollute traces
+  return /devpulse\.(umd|es|min)\.js/.test(file ?? "");
+}
+
 function parseStack(stack) {
   if (!stack) return [];
   return stack
     .split("\n")
     .slice(1)
-    .map((line) => {
-      const trimmed = line.trim();
-
-      // "  at functionName (file.js:10:5)"
-      const full = trimmed.match(/at\s+(.*?)\s+\((.*?):(\d+):(\d+)\)/);
-      if (full) {
-        return {
-          function: full[1] ?? null,
-          file: full[2] ?? null,
-          line: parseInt(full[3]) || null,
-          column: parseInt(full[4]) || null,
-        };
-      }
-
-      // "  at file.js:10:5" (anonymous or arrow functions)
-      const short = trimmed.match(/at\s+(.*?):(\d+):(\d+)/);
-      if (short) {
-        return {
-          function: null,
-          file: short[1] ?? null,
-          line: parseInt(short[2]) || null,
-          column: parseInt(short[3]) || null,
-        };
-      }
-
-      return { raw: trimmed };
-    })
-    .filter((f) => f.file || f.raw);
+    .map((line) => parseStackLine(line.trim()))
+    .filter((f) => (f.file || f.raw) && !isDevPulseFrame(f.file));
 }
 
 function buildContext() {
@@ -101,5 +121,7 @@ function buildRequest() {
   if (typeof window === "undefined") return null;
   return {
     url: window.location.href,
+    method: "GET",
+    referrer: document.referrer || null,
   };
 }

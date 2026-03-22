@@ -22,7 +22,7 @@ describe("buildFromError", () => {
     expect(payload.exception.type).toBe("Error");
   });
 
-  it("parses named function stack frames", () => {
+  it("parses named function stack frames (Chrome format)", () => {
     const err = new Error("boom");
     err.stack = [
       "Error: boom",
@@ -39,7 +39,7 @@ describe("buildFromError", () => {
     });
   });
 
-  it("parses anonymous/arrow function stack frames", () => {
+  it("parses anonymous/arrow function stack frames (Chrome)", () => {
     const err = new Error("boom");
     err.stack = ["Error: boom", "  at http://localhost/app.js:10:5"].join("\n");
 
@@ -50,6 +50,50 @@ describe("buildFromError", () => {
       line: 10,
       column: 5,
     });
+  });
+
+  it("parses Safari/Firefox stack format (named function)", () => {
+    const err = new Error("boom");
+    err.stack = [
+      "Error: boom",
+      "myFunction@http://localhost/app.js:10:5",
+      "anotherFn@http://localhost/app.js:20:3",
+    ].join("\n");
+
+    const { stacktrace } = buildFromError(err).exception;
+    expect(stacktrace[0]).toEqual({
+      function: "myFunction",
+      file: "http://localhost/app.js",
+      line: 10,
+      column: 5,
+    });
+  });
+
+  it("parses Safari/Firefox stack format (anonymous — leading @)", () => {
+    const err = new Error("boom");
+    err.stack = ["Error: boom", "@http://localhost/app.js:10:5"].join("\n");
+
+    const { stacktrace } = buildFromError(err).exception;
+    expect(stacktrace[0]).toEqual({
+      function: null,
+      file: "http://localhost/app.js",
+      line: 10,
+      column: 5,
+    });
+  });
+
+  it("filters out DevPulse SDK frames from the stacktrace", () => {
+    const err = new Error("boom");
+    err.stack = [
+      "Error: boom",
+      "  at capture (http://localhost/devpulse.umd.js:1:100)",
+      "  at userCode (http://localhost/app.js:5:10)",
+    ].join("\n");
+
+    const { stacktrace } = buildFromError(err).exception;
+    // SDK frame should be stripped; only user frame remains
+    expect(stacktrace).toHaveLength(1);
+    expect(stacktrace[0].file).toContain("app.js");
   });
 
   it("returns empty stacktrace when stack is missing", () => {
@@ -93,5 +137,11 @@ describe("buildFromPerformance", () => {
     const payload = buildFromPerformance("TTFB", 200);
     expect(payload.context).toHaveProperty("url");
     expect(payload.request).toHaveProperty("url");
+  });
+
+  it("request includes method and referrer fields", () => {
+    const payload = buildFromMessage("test");
+    expect(payload.request).toHaveProperty("method");
+    expect(payload.request).toHaveProperty("referrer");
   });
 });

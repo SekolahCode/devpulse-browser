@@ -26,8 +26,16 @@ export class Transport {
       signal: controller.signal,
     })
       .then((res) => {
-        if (!res.ok && attempt === 0) {
-          setTimeout(() => this._attempt(body, 1), 1000);
+        if (attempt === 0) {
+          if (res.status === 429) {
+            // Honour server's Retry-After (in seconds), fall back to 60 s
+            const retryAfter =
+              parseInt(res.headers.get("Retry-After") ?? "60", 10) * 1000;
+            setTimeout(() => this._attempt(body, 1), retryAfter);
+          } else if (res.status >= 500) {
+            // Only retry server errors — 4xx means bad payload, won't recover
+            setTimeout(() => this._attempt(body, 1), 1000);
+          }
         }
       })
       .catch(() => {
