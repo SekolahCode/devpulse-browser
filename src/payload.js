@@ -1,11 +1,10 @@
 export function buildFromError(error, options = {}) {
+  const chain = buildErrorChain(error);
   return {
     level: "error",
-    exception: {
-      type: error.name ?? "Error",
-      message: error.message ?? String(error),
-      stacktrace: parseStack(error.stack),
-    },
+    exception: chain[0],
+    // Include nested causes when present (e.g. new Error('x', { cause: e }))
+    ...(chain.length > 1 ? { exception_chain: chain.slice(1) } : {}),
     context: buildContext(),
     request: buildRequest(),
     user: options.user ?? null,
@@ -45,12 +44,13 @@ export function buildFromPerformance(name, value, options = {}) {
   };
 }
 
+// ── Stack parsing ─────────────────────────────────────────────────────────
+
 const CHROME_FULL = /at\s+(.*?)\s+\((.*?):(\d+):(\d+)\)/;
 const CHROME_ANON = /^at\s+(.*?):(\d+):(\d+)$/;
 const SAFARI = /^(.*?)@(.*?):(\d+):(\d+)$/;
 
 function parseStackLine(trimmed) {
-  // Chrome/Edge/Node: "at functionName (file.js:10:5)"
   let m = trimmed.match(CHROME_FULL);
   if (m) {
     return {
@@ -61,7 +61,6 @@ function parseStackLine(trimmed) {
     };
   }
 
-  // Chrome anonymous/arrow: "at file.js:10:5"
   m = trimmed.match(CHROME_ANON);
   if (m) {
     return {
@@ -72,7 +71,6 @@ function parseStackLine(trimmed) {
     };
   }
 
-  // Safari/Firefox: "functionName@file.js:10:5" or "@file.js:10:5"
   m = trimmed.match(SAFARI);
   if (m) {
     return {
@@ -87,7 +85,6 @@ function parseStackLine(trimmed) {
 }
 
 function isDevPulseFrame(file) {
-  // Strip frames from the SDK bundle itself so they don't pollute traces
   return /devpulse\.(umd|es|min)\.js/.test(file ?? "");
 }
 
@@ -100,21 +97,44 @@ function parseStack(stack) {
     .filter((f) => (f.file || f.raw) && !isDevPulseFrame(f.file));
 }
 
+/**
+ * Recursively unwrap Error.cause chains into a flat array.
+ * Stops at non-Error causes or circular references.
+ */
+function buildErrorChain(error, seen = new Set()) {
+  if (!error || seen.has(error)) return [];
+  seen.add(error);
+  const entry = {
+    type: error.name ?? "Error",
+    message: error.message ?? String(error),
+    stacktrace: parseStack(error.stack),
+  };
+  const rest =
+    error.cause instanceof Error ? buildErrorChain(error.cause, seen) : [];
+  return [entry, ...rest];
+}
+
+// ── Context builders ──────────────────────────────────────────────────────
+
 function buildContext() {
   if (typeof window === "undefined") return {};
-  return {
+  const ctx = {
     url: window.location.href,
     userAgent: navigator.userAgent,
     language: navigator.language,
-    viewport: {
-      width: window.innerWidth,
-      height: window.innerHeight,
-    },
-    screen: {
-      width: window.screen.width,
-      height: window.screen.height,
-    },
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    screen: { width: window.screen.width, height: window.screen.height },
   };
+  // Network Information API (Chrome/Android)
+  const conn = navigator.connection ?? navigator.mozConnection ?? navigator.webkitConnection;
+  if (conn) {
+    ctx.connection = {
+      effectiveType: conn.effectiveType ?? null,
+      downlink: conn.downlink ?? null,
+      rtt: conn.rtt ?? null,
+    };
+  }
+  return ctx;
 }
 
 function buildRequest() {

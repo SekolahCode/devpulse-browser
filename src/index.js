@@ -5,9 +5,10 @@ import {
 } from "./payload.js";
 import { Transport } from "./transport.js";
 
-const BREADCRUMB_LIMIT = 20;
-
 function generateSessionId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -21,6 +22,7 @@ class DevPulseClient {
     this._observers = [];
     this._sessionId = null;
     this._sampled = null;
+    this._lastError = null; // { hash, time } — for deduplication
   }
 
   init(config = {}) {
@@ -36,15 +38,14 @@ class DevPulseClient {
       enabled: config.enabled ?? true,
       trackVitals: config.trackVitals ?? true,
       tracesSampleRate: config.tracesSampleRate ?? 1.0,
-      // beforeSend(event) → return modified event or null/false to drop it
+      maxBreadcrumbs: config.maxBreadcrumbs ?? 20,
+      // beforeSend(event) → return modified event, null/false to drop, or a Promise of those
       beforeSend: config.beforeSend ?? null,
     };
 
     this.transport = new Transport(this.config.dsn);
 
-    // Session ID persists across page loads within the same browser tab
     this._sessionId = this._getOrCreateSession();
-    // Sampling is decided once per session so consistent across all events
     this._sampled = this._getSessionSampled(this.config.tracesSampleRate);
 
     if (!this.config.enabled) return;
@@ -55,13 +56,20 @@ class DevPulseClient {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  capture(error, extra = {}) {
+  async capture(error, extra = {}) {
     if (!this.transport || !this.config.enabled || !this._sampled) return;
+
+    // Deduplicate: drop the same error if it fires again within 2 s
+    const hash = `${error?.name}:${error?.message}:${String(error?.stack ?? "").split("\n")[1] ?? ""}`;
+    const now = Date.now();
+    if (this._lastError && this._lastError.hash === hash && now - this._lastError.time < 2000) {
+      return;
+    }
+    this._lastError = { hash, time: now };
 
     let payload = {
       ...buildFromError(error),
       ...extra,
-      // Core identity fields always win over anything in extra
       user: this.user,
       environment: this.config.environment,
       release: this.config.release,
@@ -70,14 +78,14 @@ class DevPulseClient {
     };
 
     if (this.config.beforeSend) {
-      payload = this.config.beforeSend(payload);
-      if (!payload) return; // null/false → drop the event
+      payload = await this.config.beforeSend(payload);
+      if (!payload) return;
     }
 
     this.transport.send(payload);
   }
 
-  captureMessage(message, level = "info", extra = {}) {
+  async captureMessage(message, level = "info", extra = {}) {
     if (!this.transport || !this.config.enabled || !this._sampled) return;
 
     let payload = {
@@ -91,7 +99,7 @@ class DevPulseClient {
     };
 
     if (this.config.beforeSend) {
-      payload = this.config.beforeSend(payload);
+      payload = await this.config.beforeSend(payload);
       if (!payload) return;
     }
 
@@ -99,7 +107,7 @@ class DevPulseClient {
   }
 
   setUser(user) {
-    this.user = user; // { id, email, name }
+    this.user = user;
   }
 
   clearUser() {
@@ -108,9 +116,25 @@ class DevPulseClient {
 
   addBreadcrumb(crumb) {
     this._breadcrumbs.push({ timestamp: new Date().toISOString(), ...crumb });
-    if (this._breadcrumbs.length > BREADCRUMB_LIMIT) {
+    const max = this.config.maxBreadcrumbs ?? 20;
+    if (this._breadcrumbs.length > max) {
       this._breadcrumbs.shift();
     }
+  }
+
+  /** Wait for all in-flight requests to settle (or timeout). */
+  flush(timeout = 5000) {
+    if (!this.transport) return Promise.resolve();
+    return this.transport.flush(timeout);
+  }
+
+  /** Disconnect all PerformanceObservers and unmark installed. */
+  close() {
+    for (const observer of this._observers) {
+      try { observer.disconnect(); } catch {}
+    }
+    this._observers = [];
+    this._installed = false;
   }
 
   // ── Error Handlers ────────────────────────────────────────────────────────
@@ -119,33 +143,17 @@ class DevPulseClient {
     if (this._installed) return;
     this._installed = true;
 
-    // Uncaught JS errors
     window.addEventListener("error", (event) => {
-      this.addBreadcrumb({
-        category: "error",
-        message: event.message,
-        level: "error",
-      });
+      this.addBreadcrumb({ category: "error", message: event.message, level: "error" });
       this.capture(event.error ?? new Error(event.message), {
-        context: {
-          filename: event.filename,
-          line: event.lineno,
-          column: event.colno,
-        },
+        context: { filename: event.filename, line: event.lineno, column: event.colno },
       });
     });
 
-    // Unhandled Promise rejections
     window.addEventListener("unhandledrejection", (event) => {
       const error =
-        event.reason instanceof Error
-          ? event.reason
-          : new Error(String(event.reason));
-      this.addBreadcrumb({
-        category: "error",
-        message: error.message,
-        level: "error",
-      });
+        event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+      this.addBreadcrumb({ category: "error", message: error.message, level: "error" });
       this.capture(error, { context: { type: "unhandledrejection" } });
     });
 
@@ -155,35 +163,50 @@ class DevPulseClient {
   // ── Breadcrumbs ───────────────────────────────────────────────────────────
 
   _installBreadcrumbs() {
-    // Click trail
+    const self = this;
+
+    // Click trail — walk up DOM to the most meaningful element
     document.addEventListener(
       "click",
       (e) => {
-        const t = e.target;
+        const t =
+          e.target?.closest?.("button, a, input, select, textarea, [role], [aria-label], [id]") ??
+          e.target;
         const label =
           t?.getAttribute?.("aria-label") ||
           (t?.id ? `#${t.id}` : null) ||
+          t?.textContent?.trim()?.slice(0, 40) ||
           t?.tagName?.toLowerCase();
-        this.addBreadcrumb({ category: "ui.click", message: label ?? "?" });
+        self.addBreadcrumb({ category: "ui.click", message: label ?? "?" });
       },
       { capture: true, passive: true },
     );
 
-    // SPA navigation trail
+    // SPA navigation — popstate (back/forward) + pushState (router.push)
     window.addEventListener("popstate", () => {
-      this.addBreadcrumb({
+      self.addBreadcrumb({
         category: "navigation",
         message: window.location.pathname,
         data: { to: window.location.href },
       });
     });
 
-    // Console trail — wrap each level
+    const origPushState = history.pushState.bind(history);
+    history.pushState = function (...args) {
+      origPushState(...args);
+      self.addBreadcrumb({
+        category: "navigation",
+        message: window.location.pathname,
+        data: { to: window.location.href },
+      });
+    };
+
+    // Console trail
     for (const level of ["log", "info", "warn", "error"]) {
       const original = console[level].bind(console);
       // eslint-disable-next-line no-console
       console[level] = (...args) => {
-        this.addBreadcrumb({
+        self.addBreadcrumb({
           category: "console",
           level,
           message: args.map(String).join(" ").slice(0, 200),
@@ -195,7 +218,6 @@ class DevPulseClient {
     // XHR trail
     const origOpen = XMLHttpRequest.prototype.open;
     const origSend = XMLHttpRequest.prototype.send;
-    const self = this;
 
     XMLHttpRequest.prototype.open = function (method, url) {
       this.__dp_method = method;
@@ -209,9 +231,47 @@ class DevPulseClient {
           category: "xhr",
           message: `${this.__dp_method ?? "?"} ${this.__dp_url ?? "?"}`,
           data: { status_code: this.status },
+          level: this.status >= 400 ? "warning" : "info",
         });
       });
       origSend.apply(this, arguments);
+    };
+
+    // Fetch trail — skip DevPulse's own ingest requests to avoid loops
+    const dsn = self.config.dsn;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async function (input, init) {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input?.url ?? "";
+      const method = (init?.method ?? "GET").toUpperCase();
+
+      // Don't breadcrumb our own transport calls
+      if (url && dsn && url.startsWith(dsn)) {
+        return origFetch(input, init);
+      }
+
+      try {
+        const res = await origFetch(input, init);
+        self.addBreadcrumb({
+          category: "fetch",
+          message: `${method} ${url}`,
+          data: { status_code: res.status },
+          level: res.status >= 400 ? "warning" : "info",
+        });
+        return res;
+      } catch (err) {
+        self.addBreadcrumb({
+          category: "fetch",
+          message: `${method} ${url}`,
+          data: { status_code: 0 },
+          level: "error",
+        });
+        throw err;
+      }
     };
   }
 
@@ -220,7 +280,7 @@ class DevPulseClient {
   _trackWebVitals() {
     if (!("PerformanceObserver" in window)) return;
 
-    // LCP — only report the final value (intermediate entries are superseded)
+    // LCP — only report the final value
     let latestLcp = null;
     this._observe("largest-contentful-paint", (entries) => {
       latestLcp = entries[entries.length - 1];
@@ -235,14 +295,11 @@ class DevPulseClient {
     window.addEventListener("pagehide", sendLcp, { once: true });
     document.addEventListener(
       "visibilitychange",
-      () => {
-        if (document.visibilityState === "hidden") sendLcp();
-      },
+      () => { if (document.visibilityState === "hidden") sendLcp(); },
       { once: true },
     );
 
-    // INP — Interaction to Next Paint (2024 Core Web Vital, replaces FID)
-    // entry.duration = time from input start to next display frame
+    // INP — Interaction to Next Paint
     let inpValue = 0;
     this._observe(
       "event",
@@ -254,12 +311,10 @@ class DevPulseClient {
       { durationThreshold: 40 },
     );
     window.addEventListener("pagehide", () => {
-      if (inpValue > 0) {
-        this.transport.send(buildFromPerformance("INP", inpValue));
-      }
+      if (inpValue > 0) this.transport.send(buildFromPerformance("INP", inpValue));
     });
 
-    // CLS — Cumulative Layout Shift (unitless score 0–1, NOT milliseconds)
+    // CLS — Cumulative Layout Shift (unitless)
     let clsValue = 0;
     this._observe("layout-shift", (entries) => {
       for (const entry of entries) {
@@ -267,12 +322,10 @@ class DevPulseClient {
       }
     });
     window.addEventListener("pagehide", () => {
-      if (clsValue > 0) {
-        this.transport.send(buildFromPerformance("CLS", clsValue, { unit: "" }));
-      }
+      if (clsValue > 0) this.transport.send(buildFromPerformance("CLS", clsValue, { unit: "" }));
     });
 
-    // TTFB — Time to First Byte
+    // TTFB + PageLoad
     window.addEventListener("load", () => {
       const nav = performance.getEntriesByType("navigation")[0];
       if (nav) {
@@ -284,9 +337,7 @@ class DevPulseClient {
 
   _observe(type, callback, observeOptions = {}) {
     try {
-      const observer = new PerformanceObserver((list) => {
-        callback(list.getEntries());
-      });
+      const observer = new PerformanceObserver((list) => callback(list.getEntries()));
       observer.observe({ type, buffered: true, ...observeOptions });
       this._observers.push(observer);
     } catch {
@@ -306,7 +357,7 @@ class DevPulseClient {
       }
       return sid;
     } catch {
-      return generateSessionId(); // sessionStorage blocked (e.g. private mode)
+      return generateSessionId();
     }
   }
 
@@ -326,12 +377,10 @@ class DevPulseClient {
   }
 }
 
-// Export singleton
 export const DevPulse = new DevPulseClient();
 export default DevPulse;
 
 // Auto-init from script tag data attributes
-// <script src="devpulse.umd.js" data-dsn="..." data-env="production"></script>
 if (typeof document !== "undefined") {
   const script = document.currentScript;
   if (script?.dataset?.dsn) {
