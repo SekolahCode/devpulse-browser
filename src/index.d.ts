@@ -54,6 +54,19 @@ export interface DevPulseException {
   stacktrace: StackFrame[];
 }
 
+export interface WebVitals {
+  /** Largest Contentful Paint in ms */
+  lcp?: number;
+  /** Time to First Byte in ms */
+  ttfb?: number;
+  /** Total page load time in ms */
+  page_load?: number;
+  /** Interaction to Next Paint in ms */
+  inp?: number;
+  /** Cumulative Layout Shift score (0–1, unitless) */
+  cls?: number;
+}
+
 export interface DevPulseEvent {
   level: "error" | "warning" | "info";
   /** Present on error events */

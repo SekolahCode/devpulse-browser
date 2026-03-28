@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   buildFromError,
   buildFromMessage,
-  buildFromPerformance,
+  buildFromVitals,
 } from "./payload.js";
 
 describe("buildFromError", () => {
@@ -118,29 +118,27 @@ describe("buildFromMessage", () => {
   });
 });
 
-describe("buildFromPerformance", () => {
-  it("rounds ms timing values to whole numbers", () => {
-    const payload = buildFromPerformance("LCP", 1234.56);
-    expect(payload.context.performance.value).toBe(1235);
-    expect(payload.context.performance.unit).toBe("ms");
-    expect(payload.message).toBe("Performance: LCP = 1235ms");
+describe("buildFromVitals", () => {
+  it("produces a constant message so all page loads group into one issue", () => {
+    const payload = buildFromVitals({ lcp: 156, ttfb: 59 });
+    expect(payload.message).toBe("Performance vitals");
+    expect(payload.level).toBe("info");
+    expect(payload.platform).toBe("browser");
   });
 
-  it("preserves 4 decimal places for unitless scores (CLS)", () => {
-    const payload = buildFromPerformance("CLS", 0.1234, { unit: "" });
-    expect(payload.context.performance.unit).toBe("");
-    expect(payload.context.performance.value).toBe(0.1234);
-    expect(payload.message).toBe("Performance: CLS = 0.1234");
+  it("embeds all provided vitals under context.vitals", () => {
+    const payload = buildFromVitals({ lcp: 200, ttfb: 80, page_load: 900, inp: 120, cls: 0.05 });
+    expect(payload.context.vitals).toEqual({ lcp: 200, ttfb: 80, page_load: 900, inp: 120, cls: 0.05 });
   });
 
-  it("includes context and request", () => {
-    const payload = buildFromPerformance("TTFB", 200);
+  it("includes context.url and request.url", () => {
+    const payload = buildFromVitals({ ttfb: 50 });
     expect(payload.context).toHaveProperty("url");
     expect(payload.request).toHaveProperty("url");
   });
 
   it("request includes method and referrer fields", () => {
-    const payload = buildFromMessage("test");
+    const payload = buildFromVitals({ lcp: 100 });
     expect(payload.request).toHaveProperty("method");
     expect(payload.request).toHaveProperty("referrer");
   });

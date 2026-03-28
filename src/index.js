@@ -1,7 +1,7 @@
 import {
   buildFromError,
   buildFromMessage,
-  buildFromPerformance,
+  buildFromVitals,
 } from "./payload.js";
 import { Transport } from "./transport.js";
 
@@ -280,26 +280,31 @@ class DevPulseClient {
   _trackWebVitals() {
     if (!("PerformanceObserver" in window)) return;
 
-    // LCP — only report the final value
+    // Accumulate all metrics; send ONE combined event per page load.
+    // Keeping the message constant ("Performance vitals") means all page loads
+    // group into a single issue instead of flooding the list.
+    const vitals = {};
+    let sent = false;
+
+    const sendVitals = () => {
+      if (sent || Object.keys(vitals).length === 0) return;
+      sent = true;
+      const payload = {
+        ...buildFromVitals(vitals),
+        environment: this.config.environment,
+        release: this.config.release,
+        session_id: this._sessionId,
+      };
+      this.transport.send(payload);
+    };
+
+    // LCP — only the final value before page hides
     let latestLcp = null;
     this._observe("largest-contentful-paint", (entries) => {
       latestLcp = entries[entries.length - 1];
     });
 
-    const sendLcp = () => {
-      if (latestLcp) {
-        this.transport.send(buildFromPerformance("LCP", latestLcp.startTime));
-        latestLcp = null;
-      }
-    };
-    window.addEventListener("pagehide", sendLcp, { once: true });
-    document.addEventListener(
-      "visibilitychange",
-      () => { if (document.visibilityState === "hidden") sendLcp(); },
-      { once: true },
-    );
-
-    // INP — Interaction to Next Paint
+    // INP — worst interaction on the page
     let inpValue = 0;
     this._observe(
       "event",
@@ -310,29 +315,38 @@ class DevPulseClient {
       },
       { durationThreshold: 40 },
     );
-    window.addEventListener("pagehide", () => {
-      if (inpValue > 0) this.transport.send(buildFromPerformance("INP", inpValue));
-    });
 
-    // CLS — Cumulative Layout Shift (unitless)
+    // CLS — cumulative score (unitless 0–1)
     let clsValue = 0;
     this._observe("layout-shift", (entries) => {
       for (const entry of entries) {
         if (!entry.hadRecentInput) clsValue += entry.value;
       }
     });
-    window.addEventListener("pagehide", () => {
-      if (clsValue > 0) this.transport.send(buildFromPerformance("CLS", clsValue, { unit: "" }));
-    });
 
-    // TTFB + PageLoad
+    // TTFB + PageLoad — available after load event
     window.addEventListener("load", () => {
       const nav = performance.getEntriesByType("navigation")[0];
       if (nav) {
-        this.transport.send(buildFromPerformance("TTFB", nav.responseStart));
-        this.transport.send(buildFromPerformance("PageLoad", nav.loadEventEnd));
+        vitals.ttfb = Math.round(nav.responseStart);
+        vitals.page_load = Math.round(nav.loadEventEnd);
       }
     });
+
+    // Flush all accumulated vitals on page hide / tab switch
+    const onHide = () => {
+      if (latestLcp) vitals.lcp = Math.round(latestLcp.startTime);
+      if (inpValue > 0) vitals.inp = Math.round(inpValue);
+      if (clsValue > 0) vitals.cls = +Number(clsValue).toFixed(4);
+      sendVitals();
+    };
+
+    window.addEventListener("pagehide", onHide, { once: true });
+    document.addEventListener(
+      "visibilitychange",
+      () => { if (document.visibilityState === "hidden") onHide(); },
+      { once: true },
+    );
   }
 
   _observe(type, callback, observeOptions = {}) {

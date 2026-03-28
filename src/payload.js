@@ -25,18 +25,20 @@ export function buildFromMessage(message, level = "info", options = {}) {
   };
 }
 
-// unit defaults to "ms" for timing metrics; pass { unit: "" } for unitless
-// scores like CLS which are in the 0–1 range, not milliseconds.
-export function buildFromPerformance(name, value, options = {}) {
-  const unit = options.unit ?? "ms";
-  const displayValue =
-    unit === "ms" ? Math.round(value) : +Number(value).toFixed(4);
+/**
+ * Build a single combined vitals event for one page load.
+ * All metrics are nested under context.vitals so the message stays
+ * constant ("Performance vitals") and all events group into one issue.
+ *
+ * @param {object} vitals — e.g. { lcp: 156, ttfb: 59, page_load: 820, inp: 120, cls: 0.01 }
+ */
+export function buildFromVitals(vitals) {
   return {
     level: "info",
-    message: `Performance: ${name} = ${displayValue}${unit}`,
+    message: "Performance vitals",
     context: {
       ...buildContext(),
-      performance: { name, value: displayValue, unit },
+      vitals,
     },
     request: buildRequest(),
     platform: "browser",
