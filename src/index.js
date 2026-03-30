@@ -324,13 +324,18 @@ class DevPulseClient {
       }
     });
 
-    // TTFB + PageLoad — available after load event
+    // TTFB + PageLoad — read after load event ends so loadEventEnd is non-zero
     window.addEventListener("load", () => {
-      const nav = performance.getEntriesByType("navigation")[0];
-      if (nav) {
-        vitals.ttfb = Math.round(nav.responseStart);
-        vitals.page_load = Math.round(nav.loadEventEnd);
-      }
+      // loadEventEnd is 0 when read synchronously inside the load handler;
+      // defer by one task so the browser has time to stamp the end time.
+      setTimeout(() => {
+        const nav = performance.getEntriesByType("navigation")[0];
+        if (nav) {
+          vitals.ttfb = Math.round(nav.responseStart);
+          const load = Math.round(nav.loadEventEnd);
+          if (load > 0) vitals.page_load = load;
+        }
+      }, 0);
     });
 
     // Flush all accumulated vitals on page hide / tab switch
