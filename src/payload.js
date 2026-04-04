@@ -1,3 +1,5 @@
+const SDK_VERSION = "devpulse-browser/1.0.0";
+
 export function buildFromError(error, options = {}) {
   const chain = buildErrorChain(error);
   return {
@@ -9,6 +11,7 @@ export function buildFromError(error, options = {}) {
     request: buildRequest(),
     user: options.user ?? null,
     platform: "browser",
+    sdk_version: SDK_VERSION,
     timestamp: new Date().toISOString(),
   };
 }
@@ -21,6 +24,7 @@ export function buildFromMessage(message, level = "info", options = {}) {
     request: buildRequest(),
     user: options.user ?? null,
     platform: "browser",
+    sdk_version: SDK_VERSION,
     timestamp: new Date().toISOString(),
   };
 }
@@ -42,6 +46,7 @@ export function buildFromVitals(vitals) {
     },
     request: buildRequest(),
     platform: "browser",
+    sdk_version: SDK_VERSION,
     timestamp: new Date().toISOString(),
   };
 }
