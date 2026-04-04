@@ -6,7 +6,9 @@ describe("Transport", () => {
   let fetchMock;
 
   beforeEach(() => {
-    transport = new Transport("https://example.com/ingest");
+    // DSN includes the API key as the last path segment; Transport extracts it
+    // and POSTs to /api/ingest with X-API-Key header instead.
+    transport = new Transport("https://example.com/api/ingest/testapikey");
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers() });
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -18,12 +20,20 @@ describe("Transport", () => {
 
   // ── Request shape ──────────────────────────────────────────────────────────
 
-  it("POSTs to the DSN", () => {
+  it("POSTs to the ingest endpoint (DSN minus the API key segment)", () => {
     transport.send({ level: "error" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://example.com/ingest");
+    expect(url).toBe("https://example.com/api/ingest");
+  });
+
+  it("sends the API key as X-API-Key header, not in the URL", () => {
+    transport.send({ level: "error" });
+
+    const [url, { headers }] = fetchMock.mock.calls[0];
+    expect(url).not.toContain("testapikey");
+    expect(headers["X-API-Key"]).toBe("testapikey");
   });
 
   it("sends with keepalive: true and credentials: omit", () => {
@@ -84,7 +94,7 @@ describe("Transport", () => {
     });
 
     it("respects a custom timeout option", () => {
-      const fast = new Transport("https://example.com/ingest", { timeout: 1000 });
+      const fast = new Transport("https://example.com/api/ingest/testapikey", { timeout: 1000 });
       fetchMock.mockReturnValue(new Promise(() => {}));
       fast.send({ level: "error" });
 

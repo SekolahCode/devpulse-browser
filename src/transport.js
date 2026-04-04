@@ -1,8 +1,25 @@
 export class Transport {
   constructor(dsn, options = {}) {
-    this.dsn = dsn;
-    this.timeout = options.timeout ?? 5000;
+    // DSN format: https://<host>/api/ingest/<api_key>
+    // Extract the key and build the endpoint URL so the key is sent as a header
+    // rather than embedded in the URL path (prevents leakage in server logs).
+    const parsed = Transport._parseDsn(dsn);
+    this.endpoint = parsed.endpoint;
+    this.apiKey   = parsed.apiKey;
+    this.timeout  = options.timeout ?? 5000;
     this._pending = new Set();
+  }
+
+  static _parseDsn(dsn) {
+    try {
+      const url = new URL(dsn);
+      const parts = url.pathname.split("/");
+      const apiKey = parts[parts.length - 1];
+      url.pathname = parts.slice(0, -1).join("/");
+      return { endpoint: url.toString(), apiKey };
+    } catch {
+      return { endpoint: dsn, apiKey: "" };
+    }
   }
 
   send(payload) {
@@ -26,9 +43,9 @@ export class Transport {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
 
-    const p = fetch(this.dsn, {
+    const p = fetch(this.endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-API-Key": this.apiKey },
       body,
       keepalive: true,
       credentials: "omit",

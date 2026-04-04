@@ -25,9 +25,36 @@ class DevPulseClient {
     this._lastError = null; // { hash, time } — for deduplication
   }
 
+  // Validate DSN is a well-formed https URL ending in /api/ingest/<key>.
+  // Prevents user-supplied DSN from pointing at internal infrastructure (SSRF).
+  _validateDsn(dsn) {
+    try {
+      const url = new URL(dsn);
+      if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+      if (!/\/api\/ingest\/[a-f0-9]{32,}$/.test(url.pathname)) return false;
+      // Block private/loopback ranges when running in a non-localhost context
+      const hostname = url.hostname;
+      if (
+        hostname !== "localhost" &&
+        hostname !== "127.0.0.1" &&
+        /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$|fc00:|fd[0-9a-f]{2}:)/i.test(hostname)
+      ) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   init(config = {}) {
     if (!config.dsn) {
       console.warn("[DevPulse] DSN is required");
+      return;
+    }
+
+    if (!this._validateDsn(config.dsn)) {
+      console.warn("[DevPulse] Invalid DSN format. Expected: https://<host>/api/ingest/<key>");
       return;
     }
 
@@ -41,6 +68,9 @@ class DevPulseClient {
       maxBreadcrumbs: config.maxBreadcrumbs ?? 20,
       // beforeSend(event) → return modified event, null/false to drop, or a Promise of those
       beforeSend: config.beforeSend ?? null,
+      // Set to true to include query strings in fetch/XHR breadcrumb URLs.
+      // Disabled by default to avoid capturing tokens or PII in query params.
+      captureQueryStrings: config.captureQueryStrings ?? false,
     };
 
     this.transport = new Transport(this.config.dsn);
@@ -137,6 +167,18 @@ class DevPulseClient {
     this._installed = false;
   }
 
+  // Strip query string and fragment from a URL string unless captureQueryStrings is enabled.
+  _sanitizeUrl(url) {
+    if (this.config.captureQueryStrings) return url;
+    try {
+      const u = new URL(url, window.location.href);
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      // Relative or unparseable URL — strip everything after ?
+      return url.split("?")[0].split("#")[0];
+    }
+  }
+
   // ── Error Handlers ────────────────────────────────────────────────────────
 
   _installHandlers() {
@@ -229,7 +271,7 @@ class DevPulseClient {
       this.addEventListener("loadend", () => {
         self.addBreadcrumb({
           category: "xhr",
-          message: `${this.__dp_method ?? "?"} ${this.__dp_url ?? "?"}`,
+          message: `${this.__dp_method ?? "?"} ${self._sanitizeUrl(this.__dp_url ?? "?")}`,
           data: { status_code: this.status },
           level: this.status >= 400 ? "warning" : "info",
         });
@@ -254,11 +296,12 @@ class DevPulseClient {
         return origFetch(input, init);
       }
 
+      const safeUrl = self._sanitizeUrl(url);
       try {
         const res = await origFetch(input, init);
         self.addBreadcrumb({
           category: "fetch",
-          message: `${method} ${url}`,
+          message: `${method} ${safeUrl}`,
           data: { status_code: res.status },
           level: res.status >= 400 ? "warning" : "info",
         });
@@ -266,7 +309,7 @@ class DevPulseClient {
       } catch (err) {
         self.addBreadcrumb({
           category: "fetch",
-          message: `${method} ${url}`,
+          message: `${method} ${safeUrl}`,
           data: { status_code: 0 },
           level: "error",
         });
@@ -397,6 +440,7 @@ class DevPulseClient {
 }
 
 export const DevPulse = new DevPulseClient();
+export { DevPulseClient };
 export default DevPulse;
 
 // Auto-init from script tag data attributes

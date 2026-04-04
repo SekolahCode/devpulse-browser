@@ -20,6 +20,12 @@ export interface DevPulseConfig {
   beforeSend?: (
     event: DevPulseEvent,
   ) => DevPulseEvent | null | false | Promise<DevPulseEvent | null | false>;
+  /**
+   * Set to true to include query strings in fetch/XHR breadcrumb URLs.
+   * Disabled by default to avoid capturing tokens or PII in query params.
+   * Default: false
+   */
+  captureQueryStrings?: boolean;
 }
 
 export interface DevPulseUser {
